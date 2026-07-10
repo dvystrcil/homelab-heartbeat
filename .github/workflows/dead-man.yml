@@ -1,0 +1,114 @@
+name: dead-man
+
+# The mine's canary. This workflow watches for SILENCE, not for signal.
+#
+# The in-cluster canary exercises the real alert path and, only on success,
+# stamps heartbeat.json. If the stamp goes stale, something between the alert
+# path and this repo is broken and nobody would otherwise know. A stale stamp
+# and a dead cluster are indistinguishable here, and that is the point: both
+# mean "go look".
+#
+# The schedule is deliberately NOT enabled yet. Nothing stamps heartbeat.json
+# until the in-cluster canary ships (homelab#431 AC5). Turning the cron on now
+# would email a failure every six hours forever, which is how an alarm gets
+# muted before it has ever told the truth. Enable the `schedule` block in the
+# same PR that deploys the canary.
+on:
+  workflow_dispatch:
+  # TODO(homelab#431 AC5): uncomment when the canary is stamping.
+  # schedule:
+  #   - cron: '0 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check-heartbeat:
+    # ubuntu-latest, NOT the homelab ARC runner. This is the one workflow that
+    # must never run inside the cluster it watches: a dead cluster would mean no
+    # runner, no job, no failure, and silence would look like health. Every other
+    # repo here should prefer the ARC runner. This one must not.
+    runs-on: ubuntu-latest
+
+    env:
+      # Canary stamps hourly. Three hours tolerates two consecutive misses
+      # before we call it dead.
+      MAX_AGE_MINUTES: '180'
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check heartbeat freshness
+        run: |
+          set -euo pipefail
+
+          if [ ! -f heartbeat.json ]; then
+            echo "::error::heartbeat.json is missing. The dead-man cannot verify anything."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+
+          max_age = int(os.environ["MAX_AGE_MINUTES"])
+
+          try:
+              hb = json.load(open("heartbeat.json"))
+          except Exception as e:
+              print(f"::error::heartbeat.json is not valid JSON: {e}")
+              sys.exit(1)
+
+          raw = hb.get("stamped_at")
+          if not raw:
+              print("::error::heartbeat.json has no stamped_at field")
+              sys.exit(1)
+
+          try:
+              ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+          except Exception as e:
+              print(f"::error::stamped_at {raw!r} is not an ISO-8601 timestamp: {e}")
+              sys.exit(1)
+
+          age = (datetime.now(timezone.utc) - ts).total_seconds() / 60
+          src = hb.get("source", "unknown")
+          run = hb.get("run_id", "unknown")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          lines = [
+              "## dead-man check",
+              "",
+              f"- stamped_at: `{raw}`",
+              f"- age: **{age:.1f} min** (threshold {max_age} min)",
+              f"- source: `{src}`",
+              f"- run_id: `{run}`",
+          ]
+
+          if src == "seed":
+              lines.append("")
+              lines.append("**Never stamped.** The in-cluster canary has not shipped yet (homelab#431 AC5).")
+              verdict = ("::error::heartbeat.json still holds the seed value - "
+                         "no canary has ever stamped it. The dead-man is armed but the mine has no bird.")
+              ok = False
+          elif age > max_age:
+              lines.append("")
+              lines.append(f"**STALE.** The canary stopped stamping {age:.0f} minutes ago.")
+              verdict = (f"::error::heartbeat is {age:.0f} min old (> {max_age}). "
+                         "The alert path, n8n, or the cluster is dead. The mine has poison.")
+              ok = False
+          else:
+              lines.append("")
+              lines.append("**Alive.** The alert path stamped within the window.")
+              verdict = None
+              ok = True
+
+          if summary:
+              open(summary, "a").write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+
+          if not ok:
+              print(verdict)
+              sys.exit(1)
+
+          print(f"heartbeat is {age:.1f} min old, within {max_age} min. Canary alive.")
+          PY
