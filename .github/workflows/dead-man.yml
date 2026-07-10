@@ -15,6 +15,15 @@ name: dead-man
 # failing one. No news is good news; an email means the canary stopped.
 on:
   workflow_dispatch:
+    inputs:
+      max_age_minutes:
+        description: >-
+          Staleness threshold in minutes for THIS manual run only. Scheduled
+          runs always use 180 (three missed hourly stamps). Pass a small value
+          (e.g. 10) to trip the check on demand — a trip-test — without waiting
+          three hours. Does not change the production threshold or cadence.
+        required: false
+        default: '180'
   schedule:
     - cron: '0 */6 * * *'
 
@@ -31,8 +40,10 @@ jobs:
 
     env:
       # Canary stamps hourly. Three hours tolerates two consecutive misses
-      # before we call it dead.
-      MAX_AGE_MINUTES: '180'
+      # before we call it dead. Scheduled runs have no `inputs`, so the
+      # expression falls through to 180 — the real, anti-false-alarm value.
+      # Only a manual dispatch can lower it, and only for that one run.
+      MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || '180' }}
 
     steps:
       - uses: actions/checkout@v6
