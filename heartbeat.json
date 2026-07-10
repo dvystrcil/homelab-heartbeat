@@ -1,1 +1,6 @@
-{"stamped_at":"1970-01-01T00:00:00Z","source":"seed","run_id":"none","app_write_verified_at":"2026-07-10T03:32:13Z","note":"Seeded intentionally stale. Nothing stamps this yet - the in-cluster canary does not exist. app_write_verified_at proves the GitHub App can push past the branch ruleset. See README."}
+{
+  "stamped_at": "2026-07-10T17:25:01Z",
+  "source": "canary",
+  "run_id": "36123",
+  "note": "Stamped hourly by the alerting-canary n8n workflow. If stamped_at goes stale, n8n stopped executing $env-reading workflows. See dvystrcil/homelab#431 and dvystrcil/homelab-heartbeat."
+}
