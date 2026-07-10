@@ -8,16 +8,15 @@ name: dead-man
 # and a dead cluster are indistinguishable here, and that is the point: both
 # mean "go look".
 #
-# The schedule is deliberately NOT enabled yet. Nothing stamps heartbeat.json
-# until the in-cluster canary ships (homelab#431 AC5). Turning the cron on now
-# would email a failure every six hours forever, which is how an alarm gets
-# muted before it has ever told the truth. Enable the `schedule` block in the
-# same PR that deploys the canary.
+# The schedule is live. The alerting-canary n8n workflow (n8n-workflow#90)
+# stamps heartbeat.json hourly, so a healthy run finds a fresh stamp and this
+# check passes silently. It was verified stamping before the schedule was
+# enabled: a fresh stamp produced a passing run, the 1970 seed produced a
+# failing one. No news is good news; an email means the canary stopped.
 on:
   workflow_dispatch:
-  # TODO(homelab#431 AC5): uncomment when the canary is stamping.
-  # schedule:
-  #   - cron: '0 */6 * * *'
+  schedule:
+    - cron: '0 */6 * * *'
 
 permissions:
   contents: read
