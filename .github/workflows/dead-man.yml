@@ -46,7 +46,7 @@ jobs:
       MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || '180' }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check heartbeat freshness
         run: |
