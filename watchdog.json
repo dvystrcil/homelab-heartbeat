@@ -1,9 +1,9 @@
 {
-  "stamped_at": "2026-08-20T15:12:51Z",
+  "stamped_at": "2026-08-20T15:32:52Z",
   "source": "alertmanager-watchdog",
-  "run_id": "64843",
-  "alert_status": "unknown",
-  "receiver": "unknown",
-  "alert_count": 0,
+  "run_id": "64859",
+  "alert_status": "firing",
+  "receiver": "monitoring/discord/watchdog-deadman",
+  "alert_count": 1,
   "note": "Stamped by Alertmanager's always-firing Watchdog alert via n8n. If stamped_at goes stale, the chain Prometheus -> Alertmanager -> n8n -> GitHub is broken somewhere. Unlike heartbeat.json this DOES exercise the alert path. See dvystrcil/homelab#431."
 }
