@@ -21,29 +21,53 @@ that never fires is indistinguishable from a watcher with nothing to report.
 
 ## How it works
 
+Two stamps, watching two **different** chains. This distinction is the whole point:
+
 ```
-in-cluster canary (n8n, hourly)
-  ├─ exercises the REAL alert path ($env → Discord webhook)
-  └─ only on success: stamps heartbeat.json in this repo
-                      (GitHub App installation token, auto-rotated hourly)
+heartbeat.json  — proves n8n is EXECUTING
+  n8n schedule trigger (hourly) → $env read → GitHub App token → stamp
+
+watchdog.json   — proves an alert can LEAVE THE CLUSTER
+  Prometheus (Watchdog alert, always firing by design)
+    → Alertmanager (delivers it)
+      → n8n webhook
+        → GitHub App token → stamp
 
 dead-man (GitHub Actions, cron */6h, ubuntu-latest)
-  ├─ reads heartbeat.json
-  └─ stamped_at older than 180 min?  →  workflow FAILS  →  GitHub emails you
+  ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you
+  └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you
 ```
 
-Every failure collapses to the same visible outcome:
+`watchdog.json` exists because `heartbeat.json` alone was never enough, though this
+README previously claimed it was. The canary reads `$env` but **never posts to
+Discord and never touches Alertmanager** — `alerting_canary.json` has a single
+commit and `git log -S 'discord'` on it returns nothing. Prometheus and Alertmanager
+were nowhere in its chain, so both could die with `heartbeat.json` staying perfectly
+fresh (dvystrcil/homelab#431).
 
-| what broke | heartbeat | dead-man |
-|---|---|---|
-| `$env` regresses again | stops | fails |
-| Discord webhook rotated/revoked | stops | fails |
-| n8n down, or its App token expired | stops | fails |
-| whole cluster down | stops | fails |
-| power/ISP out | stops | fails |
-| **dead-man itself is broken** | — | *see below* |
+| what broke | `heartbeat.json` | `watchdog.json` | dead-man |
+|---|---|---|---|
+| n8n `$env` regresses again | stops | stops | fails |
+| n8n scheduler wedged (n8n-workflow#89) | stops | — | fails |
+| n8n down, or its App token expired | stops | stops | fails |
+| **Prometheus down / not evaluating** | *keeps stamping* | **stops** | fails |
+| **Alertmanager down or misrouted to `null`** | *keeps stamping* | **stops** | fails |
+| whole cluster down | stops | stops | fails |
+| power/ISP out | stops | stops | fails |
+| **dead-man itself is broken** | — | — | *see below* |
 
-All of them mean *go look*. None of them can be mistaken for health.
+The two rows in bold are exactly what `heartbeat.json` could never see, and are the
+reason this repo needed a second stamp.
+
+### Still not covered
+
+**Discord delivery itself.** Neither stamp proves a message reached Discord;
+`watchdog.json` proves Alertmanager *delivered a notification to n8n*, which is a
+different receiver on the same alert. Discord health is currently evidenced only by
+`alertmanager_notifications_total{integration="discord"}` (905 sent, 4 failed as of
+2026-08-19). Closing that gap needs a canary that posts to a low-noise `#canary`
+channel — homelab#431 AC5/AC6. Written down rather than left implied, because an
+uncovered gap that *looks* covered is how this repo came to exist.
 
 ## Design constraints (each one is load-bearing)
 
@@ -67,16 +91,19 @@ repo exists to catch.
 
 ## Current status
 
-The `schedule` trigger is **commented out**, and `heartbeat.json` holds a seed value
-with `stamped_at: 1970-01-01`.
+| stamp | state |
+|---|---|
+| `heartbeat.json` | **live.** Stamped hourly by `Alerting Canary — heartbeat stamp`; the `schedule` cron is enabled and passing. |
+| `watchdog.json` | **seeded, arming.** Stamped once `dvystrcil/prometheus` routes `Watchdog` away from `null` to the receiver in dvystrcil/n8n-workflow#164. |
 
-Nothing stamps it yet — the in-cluster canary does not exist (homelab#431 AC5).
-Enabling the cron now would email a failure every six hours forever, and an alarm that
-cries wolf before it has ever told the truth gets muted. Enable `schedule` in the same
-PR that deploys the canary.
+While `watchdog.json` holds its seed the dead-man **warns but does not fail**, so an
+in-progress rollout cannot cry wolf every six hours — an alarm that fires before it
+has ever told the truth gets muted.
 
-Until then the workflow runs on `workflow_dispatch` only, and correctly reports the
-seed as a failure: **the dead-man is armed, but the mine has no bird.**
+That leniency is time-boxed. The seed carries an `arm_after` timestamp, and past it
+the seed escalates to a hard failure: *armed, but no bird*. A warning nobody reads is
+the precise bug this repo exists to catch, so the grace period expires by itself
+rather than depending on anyone remembering.
 
 ## Who watches the dead-man?
 
@@ -91,3 +118,4 @@ internet.
 - [homelab#431](https://github.com/dvystrcil/homelab/issues/431) — the canary design
 - [n8n-workflow#87](https://github.com/dvystrcil/n8n-workflow/issues/87) — the `$env` outage
 - [n8n-workflow#88](https://github.com/dvystrcil/n8n-workflow/pull/88) — alerting restored
+- [n8n-workflow#164](https://github.com/dvystrcil/n8n-workflow/pull/164) — the `watchdog.json` receiver

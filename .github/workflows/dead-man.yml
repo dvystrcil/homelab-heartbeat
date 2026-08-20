@@ -2,11 +2,21 @@ name: dead-man
 
 # The mine's canary. This workflow watches for SILENCE, not for signal.
 #
-# The in-cluster canary exercises the real alert path and, only on success,
-# stamps heartbeat.json. If the stamp goes stale, something between the alert
-# path and this repo is broken and nobody would otherwise know. A stale stamp
-# and a dead cluster are indistinguishable here, and that is the point: both
-# mean "go look".
+# Two independent stamps, watching two different chains:
+#
+#   heartbeat.json  n8n scheduler -> GitHub.        Proves n8n is EXECUTING.
+#   watchdog.json   Prometheus -> Alertmanager
+#                     -> n8n -> GitHub.             Proves an alert can LEAVE.
+#
+# This file used to claim the in-cluster canary "exercises the real alert path".
+# It never did. alerting_canary.json has one commit and `git log -S 'discord'`
+# returns nothing — Prometheus and Alertmanager appear nowhere in its chain, so
+# both could die with heartbeat.json staying fresh and nothing would page
+# (dvystrcil/homelab#431). watchdog.json closes that gap: it is stamped only by
+# Alertmanager's always-firing Watchdog alert actually being delivered.
+#
+# A stale stamp and a dead cluster are indistinguishable here, and that is the
+# point: both mean "go look".
 #
 # The schedule is live. The alerting-canary n8n workflow (n8n-workflow#90)
 # stamps heartbeat.json hourly, so a healthy run finds a fresh stamp and this
@@ -39,11 +49,16 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Canary stamps hourly. Three hours tolerates two consecutive misses
-      # before we call it dead. Scheduled runs have no `inputs`, so the
-      # expression falls through to 180 — the real, anti-false-alarm value.
-      # Only a manual dispatch can lower it, and only for that one run.
+      # heartbeat.json: canary stamps hourly. Three hours tolerates two
+      # consecutive misses before we call it dead. Scheduled runs have no
+      # `inputs`, so the expression falls through to 180 — the real,
+      # anti-false-alarm value. Only a manual dispatch can lower it, and only
+      # for that one run.
       MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || '180' }}
+      # watchdog.json: stamped every Alertmanager repeat_interval (15m), so 60
+      # tolerates three consecutive misses. Tighter than heartbeat because this
+      # is the leg that proves an alert can leave the cluster at all.
+      WATCHDOG_MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || '60' }}
 
     steps:
       - uses: actions/checkout@v7
@@ -52,73 +67,107 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f heartbeat.json ]; then
-            echo "::error::heartbeat.json is missing. The dead-man cannot verify anything."
-            exit 1
-          fi
-
           python3 - <<'PY'
           import json, os, sys
           from datetime import datetime, timezone
 
-          max_age = int(os.environ["MAX_AGE_MINUTES"])
+          now = datetime.now(timezone.utc)
 
-          try:
-              hb = json.load(open("heartbeat.json"))
-          except Exception as e:
-              print(f"::error::heartbeat.json is not valid JSON: {e}")
-              sys.exit(1)
-
-          raw = hb.get("stamped_at")
-          if not raw:
-              print("::error::heartbeat.json has no stamped_at field")
-              sys.exit(1)
-
-          try:
-              ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-          except Exception as e:
-              print(f"::error::stamped_at {raw!r} is not an ISO-8601 timestamp: {e}")
-              sys.exit(1)
-
-          age = (datetime.now(timezone.utc) - ts).total_seconds() / 60
-          src = hb.get("source", "unknown")
-          run = hb.get("run_id", "unknown")
-
-          summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          lines = [
-              "## dead-man check",
-              "",
-              f"- stamped_at: `{raw}`",
-              f"- age: **{age:.1f} min** (threshold {max_age} min)",
-              f"- source: `{src}`",
-              f"- run_id: `{run}`",
+          # (filename, threshold-minutes, what a fresh stamp proves)
+          CHECKS = [
+              ("heartbeat.json", int(os.environ["MAX_AGE_MINUTES"]),
+               "n8n is executing scheduled workflows"),
+              ("watchdog.json", int(os.environ["WATCHDOG_MAX_AGE_MINUTES"]),
+               "an alert can leave the cluster (Prometheus -> Alertmanager -> n8n)"),
           ]
 
-          if src == "seed":
-              lines.append("")
-              lines.append("**Never stamped.** The in-cluster canary has not shipped yet (homelab#431 AC5).")
-              verdict = ("::error::heartbeat.json still holds the seed value - "
-                         "no canary has ever stamped it. The dead-man is armed but the mine has no bird.")
-              ok = False
-          elif age > max_age:
-              lines.append("")
-              lines.append(f"**STALE.** The canary stopped stamping {age:.0f} minutes ago.")
-              verdict = (f"::error::heartbeat is {age:.0f} min old (> {max_age}). "
-                         "The alert path, n8n, or the cluster is dead. The mine has poison.")
-              ok = False
-          else:
-              lines.append("")
-              lines.append("**Alive.** The alert path stamped within the window.")
-              verdict = None
-              ok = True
+          lines = ["## dead-man check", ""]
+          failures = []
 
+          def fail(msg):
+              failures.append(msg)
+
+          for name, max_age, proves in CHECKS:
+              lines += [f"### `{name}`", "", f"_Proves: {proves}_", ""]
+
+              if not os.path.exists(name):
+                  lines.append(f"**MISSING.** The dead-man cannot verify anything.")
+                  fail(f"::error::{name} is missing. The dead-man cannot verify anything.")
+                  lines.append("")
+                  continue
+
+              try:
+                  doc = json.load(open(name))
+              except Exception as e:
+                  lines.append(f"**INVALID JSON.** {e}")
+                  fail(f"::error::{name} is not valid JSON: {e}")
+                  lines.append("")
+                  continue
+
+              raw = doc.get("stamped_at")
+              if not raw:
+                  lines.append("**NO stamped_at FIELD.**")
+                  fail(f"::error::{name} has no stamped_at field")
+                  lines.append("")
+                  continue
+
+              try:
+                  ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+              except Exception as e:
+                  lines.append(f"**BAD TIMESTAMP.** {raw!r}")
+                  fail(f"::error::{name} stamped_at {raw!r} is not ISO-8601: {e}")
+                  lines.append("")
+                  continue
+
+              age = (now - ts).total_seconds() / 60
+              src = doc.get("source", "unknown")
+              lines += [
+                  f"- stamped_at: `{raw}`",
+                  f"- age: **{age:.1f} min** (threshold {max_age} min)",
+                  f"- source: `{src}`",
+                  f"- run_id: `{doc.get('run_id', 'unknown')}`",
+                  "",
+              ]
+
+              if src == "seed":
+                  # A seed means nothing has ever stamped this file. During a
+                  # rollout that is expected and must not page. But a warning
+                  # nobody reads is the exact bug this repo exists to prevent,
+                  # so the seed carries arm_after: past that date it escalates
+                  # to a hard failure and an unfinished rollout cannot go quiet.
+                  arm_raw = doc.get("arm_after")
+                  armed = True
+                  if arm_raw:
+                      try:
+                          armed = now >= datetime.fromisoformat(arm_raw.replace("Z", "+00:00"))
+                      except Exception:
+                          armed = True
+                  if armed:
+                      lines.append(f"**NEVER STAMPED, AND PAST arm_after (`{arm_raw}`).**")
+                      fail(f"::error::{name} still holds its seed value and arm_after has "
+                           f"passed - the chain was never wired up. Armed, but no bird.")
+                  else:
+                      lines.append(f"**Not yet stamped.** Rollout in progress; arms at `{arm_raw}`.")
+                      print(f"::warning::{name} still holds its seed value. Not failing yet - "
+                            f"arms at {arm_raw}.")
+              elif age > max_age:
+                  lines.append(f"**STALE.** Stopped stamping {age:.0f} minutes ago.")
+                  fail(f"::error::{name} is {age:.0f} min old (> {max_age}). "
+                       f"Broken: {proves}.")
+              else:
+                  lines.append("**Alive.** Stamped within the window.")
+
+              lines.append("")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary:
               open(summary, "a").write("\n".join(lines) + "\n")
           print("\n".join(lines))
 
-          if not ok:
-              print(verdict)
+          if failures:
+              for f in failures:
+                  print(f)
               sys.exit(1)
 
-          print(f"heartbeat is {age:.1f} min old, within {max_age} min. Canary alive.")
+          print("All dead-man stamps within their windows. Canaries alive.")
           PY
