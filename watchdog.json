@@ -1,0 +1,6 @@
+{
+  "stamped_at": "1970-01-01T00:00:00Z",
+  "source": "seed",
+  "arm_after": "2026-08-27T00:24:27Z",
+  "note": "Seed value. Stamped by Alertmanager's always-firing Watchdog alert via the n8n 'Alert-Path Dead-Man' workflow (dvystrcil/n8n-workflow#164) once dvystrcil/prometheus routes Watchdog away from 'null'. Unlike heartbeat.json, a fresh stamp here proves the chain Prometheus -> Alertmanager -> n8n -> GitHub is alive, i.e. that an alert can actually leave the cluster. While source is 'seed' the dead-man warns; after arm_after it escalates to a hard failure, so an unfinished rollout cannot go quiet. See dvystrcil/homelab#431 AC3/AC4."
+}
