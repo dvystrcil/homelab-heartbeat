@@ -28,12 +28,20 @@ on:
     inputs:
       max_age_minutes:
         description: >-
-          Staleness threshold in minutes for THIS manual run only. Scheduled
-          runs always use 180 (three missed hourly stamps). Pass a small value
-          (e.g. 10) to trip the check on demand — a trip-test — without waiting
-          three hours. Does not change the production threshold or cadence.
+          Staleness threshold in minutes for THIS manual run only, applied to
+          BOTH stamps. Leave blank to use each stamp's production threshold
+          (heartbeat 180, watchdog 60). Pass a small value (e.g. 5) to trip the
+          check on demand — a trip-test — without waiting for the real window.
+          Does not change the production thresholds or cadence.
         required: false
-        default: '180'
+        # Deliberately blank, NOT '180'. A non-empty default is always truthy,
+        # so it won on every manual run and silently applied heartbeat's 180 to
+        # watchdog.json too — reporting "threshold 180 min" for a stamp whose
+        # real threshold is 60, and making manual trip-tests less sensitive
+        # than the scheduled runs they are meant to rehearse. Scheduled runs
+        # were unaffected (no `inputs` at all), which is exactly why it was
+        # invisible.
+        default: ''
   schedule:
     - cron: '0 */6 * * *'
 
