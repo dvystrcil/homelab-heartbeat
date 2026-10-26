@@ -1,6 +1,6 @@
 {
-  "stamped_at": "2026-10-26T19:00:15Z",
+  "stamped_at": "2026-10-26T20:00:19Z",
   "source": "canary",
-  "run_id": "149737",
+  "run_id": "149853",
   "note": "Stamped hourly by the alerting-canary n8n workflow. If stamped_at goes stale, n8n stopped executing $env-reading workflows. See dvystrcil/homelab#431 and dvystrcil/homelab-heartbeat."
 }
