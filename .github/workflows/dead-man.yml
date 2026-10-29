@@ -43,7 +43,13 @@ on:
         # invisible.
         default: ''
   schedule:
-    - cron: '0 */6 * * *'
+    # Minute 37, NOT 0. GitHub documents the start of every hour as peak load
+    # for scheduled runs: they get delayed, and some are dropped. On `0 */6`
+    # the last 200 runs started a median 225 min late, ~5% of slots never ran,
+    # and runs landed up to 13.5 h apart, so an alarm meant to look every 6 h
+    # missed a 200-min watchdog outage entirely (homelab-heartbeat#10).
+    # Same 6-hourly cadence, just off the peak minute.
+    - cron: '37 */6 * * *'
 
 permissions:
   contents: read
