@@ -33,7 +33,7 @@ watchdog.json   — proves an alert can LEAVE THE CLUSTER
       → n8n webhook
         → GitHub App token → stamp
 
-dead-man (GitHub Actions, cron */6h, ubuntu-latest)
+dead-man (GitHub Actions, cron 37 */6, ubuntu-latest)
   ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you
   └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you
 ```
