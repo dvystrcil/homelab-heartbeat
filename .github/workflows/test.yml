@@ -1,0 +1,24 @@
+name: test
+
+# Unit tests for the dead-man's helper scripts (.github/scripts/).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    # ubuntu-latest like the rest of this repo: public, so minutes are free, and
+    # nothing here should depend on the cluster the dead-man watches.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s tests -v 2>&1 | tee out.txt
+          # Assert the suite actually ran, not just exited 0 on zero tests.
+          grep -Eq '^Ran ([1-9][0-9]*) tests?' out.txt

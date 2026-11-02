@@ -38,6 +38,15 @@ dead-man (GitHub Actions, cron 37 */6, ubuntu-latest)
   └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you
 ```
 
+**`*/6` is a request, not a guarantee.** GitHub delays scheduled runs under load and
+sometimes drops them, and it documents the start of every hour as the peak. On
+`0 */6` runs started a median 225 min late and landed up to 13.5 h apart, so the cron
+now sits at minute 37 (homelab-heartbeat#10). The two thresholds measure *stamp age*
+and do not depend on run spacing. Spacing decides only how long after a stamp goes
+stale someone gets the email: up to the threshold plus the gap to the next run that
+actually executes. Every run writes its trigger delay (start minus nominal slot) to
+the step summary, so that gap can be re-measured from run history.
+
 `watchdog.json` exists because `heartbeat.json` alone was never enough, though this
 README previously claimed it was. The canary reads `$env` but **never posts to
 Discord and never touches Alertmanager** — `alerting_canary.json` has a single
