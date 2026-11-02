@@ -77,6 +77,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # How late GitHub started this run vs its nominal cron slot, so the
+      # schedule's real spacing is re-measurable from run history
+      # (homelab-heartbeat#10 AC2). Telemetry only: continue-on-error, so it
+      # can never be what turns the dead-man red, or what keeps it green.
+      - name: Record trigger delay
+        continue-on-error: true
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python3 .github/scripts/trigger_delay.py
+
       - name: Check heartbeat freshness
         run: |
           set -euo pipefail
