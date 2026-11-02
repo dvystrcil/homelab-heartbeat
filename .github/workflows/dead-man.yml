@@ -43,13 +43,14 @@ on:
         # invisible.
         default: ''
   schedule:
-    # Minute 37, NOT 0. GitHub documents the start of every hour as peak load
-    # for scheduled runs: they get delayed, and some are dropped. On `0 */6`
-    # the last 200 runs started a median 225 min late, ~5% of slots never ran,
-    # and runs landed up to 13.5 h apart, so an alarm meant to look every 6 h
-    # missed a 200-min watchdog outage entirely (homelab-heartbeat#10).
-    # Same 6-hourly cadence, just off the peak minute.
-    - cron: '37 */6 * * *'
+    # Hourly, and still GitHub's own scheduler. GitHub creates scheduled runs
+    # here only ~5 times a day however often the cron asks, and moving off
+    # minute 0 changed nothing (off-peak */6 crons run just as late). Asking
+    # hourly gets more of those runs: max gap between runs ~10.5 h vs 14 h on
+    # */6 (homelab-heartbeat#10, homelab#1906). Do NOT hand the trigger to n8n
+    # or anything else on the cluster: the dead-man is the cluster's outside
+    # observer, and a trigger the cluster controls dies or lies along with it.
+    - cron: '37 * * * *'
 
 permissions:
   contents: read
