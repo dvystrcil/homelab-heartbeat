@@ -33,19 +33,34 @@ watchdog.json   — proves an alert can LEAVE THE CLUSTER
       → n8n webhook
         → GitHub App token → stamp
 
-dead-man (GitHub Actions, cron 37 */6, ubuntu-latest)
+dead-man (GitHub Actions, cron 37 * * * *, ubuntu-latest)
   ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you
   └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you
 ```
 
-**`*/6` is a request, not a guarantee.** GitHub delays scheduled runs under load and
-sometimes drops them, and it documents the start of every hour as the peak. On
-`0 */6` runs started a median 225 min late and landed up to 13.5 h apart, so the cron
-now sits at minute 37 (homelab-heartbeat#10). The two thresholds measure *stamp age*
-and do not depend on run spacing. Spacing decides only how long after a stamp goes
-stale someone gets the email: up to the threshold plus the gap to the next run that
-actually executes. Every run writes its trigger delay (start minus nominal slot) to
-the step summary, so that gap can be re-measured from run history.
+**The cron is a request, not a guarantee.** GitHub delays scheduled runs under load
+and drops the ones it can't fit, and on this account it creates scheduled runs only
+about five times a day however often the cron asks (homelab-heartbeat#10,
+homelab#1906). Measured gaps between consecutive runs:
+
+| cron | runs/day | gap p50 / p95 / max |
+|---|---|---|
+| `0 */6` (Jul–Oct 2026) | 3.8 | 6.0 / 9.6 / 14.0 h |
+| `25`/`35 */6`, other repos (Oct) | 3.3 | 7.2 / 9.6 / 13.6 h |
+| `17 * * * *`, other repos (Oct) | 4.8 | 5.1 / 7.5 / 10.5 h |
+
+Moving off minute 0 did not help: off-peak `*/6` crons run as late as minute-0 ones.
+Asking hourly does: it turns the same scheduler into more runs and a shorter worst
+gap, so the cron is `37 * * * *`. It is still GitHub-scheduled on purpose. No trigger
+on the cluster (n8n included) may be part of the dead-man, because the dead-man is the
+observer of the cluster and must keep working when the cluster is compromised or gone.
+
+The two thresholds measure *stamp age* and do not depend on run spacing. Spacing
+decides only how long after a stamp goes stale someone gets the email: up to the
+threshold plus the gap to the next run that actually executes. Every run writes its
+trigger delay (start minus nominal slot) to the step summary. At an hourly cron that
+delay wraps at 60 min, so use the interval between runs in the run history as the
+real measure.
 
 `watchdog.json` exists because `heartbeat.json` alone was never enough, though this
 README previously claimed it was. The canary reads `$env` but **never posts to

@@ -4,6 +4,7 @@ Run: python3 -m unittest discover -s tests
 """
 import importlib.util
 import pathlib
+import re
 import unittest
 from datetime import datetime, timezone
 
@@ -74,6 +75,17 @@ class Render(unittest.TestCase):
         # The delay is telemetry; it must never be what fails the dead-man.
         text = "\n".join(td.render("schedule", "37 */6 * * 1", utc(2026, 11, 1, 12, 0)))
         self.assertIn("could not compute", text)
+
+
+class LiveWorkflow(unittest.TestCase):
+    def test_every_dead_man_cron_has_a_computable_slot(self):
+        # The telemetry only supports minute/hour fields. A cron edit that adds
+        # a day field would quietly turn every run's delay into a warning.
+        wf = (_PATH.parent.parent / "workflows" / "dead-man.yml").read_text()
+        crons = re.findall(r"^\s*- cron: '([^']+)'", wf, re.M)
+        self.assertTrue(crons, "no cron found in dead-man.yml")
+        for cron in crons:
+            td.nominal_slot(cron, utc(2026, 11, 1, 12, 0))
 
 
 if __name__ == "__main__":
