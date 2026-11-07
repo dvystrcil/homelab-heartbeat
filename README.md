@@ -34,8 +34,8 @@ watchdog.json   — proves an alert can LEAVE THE CLUSTER
         → GitHub App token → stamp
 
 dead-man (GitHub Actions, cron 37 * * * *, ubuntu-latest)
-  ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you
-  └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you
+  ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you (every failed run)
+  └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you (every failed run)
 ```
 
 **The cron is a request, not a guarantee.** GitHub delays scheduled runs under load
@@ -61,6 +61,40 @@ threshold plus the gap to the next run that actually executes. Every run writes 
 trigger delay (start minus nominal slot) to the step summary. At an hourly cron that
 delay wraps at 60 min, so use the interval between runs in the run history as the
 real measure.
+
+### What a long outage looks like in your inbox
+
+**One email per failed run. GitHub does not deduplicate them.** Verified 2026-11-07
+with two trip-test runs two minutes apart (`max_age_minutes=1`, runs
+[42335995316](https://github.com/dvystrcil/homelab-heartbeat/actions/runs/42335995316)
+and [42336143945](https://github.com/dvystrcil/homelab-heartbeat/actions/runs/42336143945)):
+the second failed straight after the first, with no pass between, and still sent its
+own email. The scheduled failures on 2026-10-25, 10-26 and 10-27 each sent one too.
+Each email arrives within about a minute, with the subject
+`[dvystrcil/homelab-heartbeat] Run failed: dead-man - main (<short sha>)`.
+
+**Who gets them.** GitHub's docs say notifications for scheduled workflows go "to the
+user who last modified the cron syntax in the workflow file", or to whoever last
+re-enabled a disabled workflow
+([Events that trigger workflows § schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
+[Notifications for workflow runs](https://docs.github.com/en/actions/concepts/workflows-and-actions/notifications-for-workflow-runs)).
+That is whoever merges the next cron change, so a cron edit also moves the alarm to a
+new inbox. The recipient also needs Actions notifications set to *Email* (Settings →
+Notifications → System → Actions), or GitHub sends nothing at all.
+
+**Volume.** One email arrives per run GitHub actually creates, not one per cron slot.
+At about 5 runs a day, an outage sends one email every few hours: a 10-hour outage
+sends roughly 2–3, and a full day about 5. The ceiling is 24 a day, if GitHub ever ran
+every hourly slot. Gmail groups emails with the same subject into one conversation,
+and the subject carries the `main` SHA. When the stamps stop committing, that SHA
+freezes and every email after the first stacks in one thread, so count the messages
+inside the thread, not the threads.
+
+**Not verified.** Two failures in a row as *scheduled* runs on the *same* SHA. The
+trip-test runs were manual and on different SHAs. The earlier back-to-back outages
+(2026-08-01, 2026-09-06) left no email in the inbox today, but they are past Gmail's
+30-day Trash purge, so they can't tell "never sent" from "deleted". Don't delete
+dead-man emails: they are the evidence for the next check.
 
 `watchdog.json` exists because `heartbeat.json` alone was never enough, though this
 README previously claimed it was. The canary reads `$env` but **never posts to
