@@ -76,7 +76,7 @@ jobs:
       WATCHDOG_MAX_AGE_MINUTES: ${{ github.event.inputs.max_age_minutes || '60' }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # How late GitHub started this run vs its nominal cron slot, so the
       # schedule's real spacing is re-measurable from run history
