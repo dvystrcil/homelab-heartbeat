@@ -48,6 +48,7 @@ homelab#1906). Measured gaps between consecutive runs:
 | `0 */6` (Jul–Oct 2026) | 3.8 | 6.0 / 9.6 / 14.0 h |
 | `25`/`35 */6`, other repos (Oct) | 3.3 | 7.2 / 9.6 / 13.6 h |
 | `17 * * * *`, other repos (Oct) | 4.8 | 5.1 / 7.5 / 10.5 h |
+| **`37 * * * *`, this repo (Nov 2–14 2026, 46 runs)** | 3.6 | 6.9 / 9.1 / **11.4 h** |
 
 Moving off minute 0 did not help: off-peak `*/6` crons run as late as minute-0 ones.
 Asking hourly does: it turns the same scheduler into more runs and a shorter worst
@@ -61,6 +62,29 @@ threshold plus the gap to the next run that actually executes. Every run writes 
 trigger delay (start minus nominal slot) to the step summary. At an hourly cron that
 delay wraps at 60 min, so use the interval between runs in the run history as the
 real measure.
+
+### Worst-case detection latency
+
+A stamp has to go stale first, and then a run has to actually execute. The worst
+case is a run that checks just before the threshold is crossed, followed by the
+longest gap GitHub leaves before the next run (11.4 h measured, above):
+
+| stamp | threshold | + worst gap | email at most this long after the last good stamp |
+|---|---|---|---|
+| `watchdog.json` (alert path) | 60 min | 11.4 h | **~12.5 h** |
+| `heartbeat.json` (n8n executing) | 180 min | 11.4 h | **~14.5 h** |
+
+A typical gap is 6.9 h (p50), which puts the watchdog leg at about 8 h, but plan
+around the worst case: about 12–14 h, not the 1 h or 6 h the thresholds and the old
+cron suggest. An outage shorter than the gap between two runs can open
+and close without either run seeing it (it happened on 2026-10-25, dvystrcil/homelab#1802), and
+a point-sample alarm can never catch that. The gap history lives in dvystrcil/homelab#1843.
+
+This is accepted, not pending a fix (homelab-heartbeat#10, 2026-11-14). GitHub's
+scheduler can't deliver less, and every faster trigger considered either ran on the
+cluster, needed a dispatch credential, or broke GitHub's Actions terms by holding a
+hosted runner for hours. If the bound has to come down, the route is a second
+off-cluster observer with its own clock, not a change to this workflow.
 
 ### What a long outage looks like in your inbox
 
@@ -117,6 +141,11 @@ fresh (dvystrcil/homelab#431).
 The two rows in bold are exactly what `heartbeat.json` could never see, and are the
 reason this repo needed a second stamp.
 
+"Fails" means the email arrives within the
+[worst-case detection latency](#worst-case-detection-latency):
+up to ~12.5 h for a row the watchdog leg catches, ~14.5 h for one only `heartbeat.json`
+catches. It does not mean within an hour.
+
 ### Still not covered
 
 **Discord delivery itself.** Neither stamp proves a message reached Discord;
@@ -152,10 +181,10 @@ repo exists to catch.
 | stamp | state |
 |---|---|
 | `heartbeat.json` | **live.** Stamped hourly by `Alerting Canary — heartbeat stamp`; the `schedule` cron is enabled and passing. |
-| `watchdog.json` | **seeded, arming.** Stamped once `dvystrcil/prometheus` routes `Watchdog` away from `null` to the receiver in dvystrcil/n8n-workflow#164. |
+| `watchdog.json` | **live.** Stamped every ~20 min by Alertmanager's `Watchdog` alert through the `monitoring/discord/watchdog-deadman` receiver (dvystrcil/n8n-workflow#164). |
 
 While `watchdog.json` holds its seed the dead-man **warns but does not fail**, so an
-in-progress rollout cannot cry wolf every six hours — an alarm that fires before it
+in-progress rollout cannot cry wolf on every run — an alarm that fires before it
 has ever told the truth gets muted.
 
 That leniency is time-boxed. The seed carries an `arm_after` timestamp, and past it
@@ -170,6 +199,10 @@ because this layer has the fewest moving parts (one cron, one file, one comparis
 runs on infrastructure we do not operate, and reports through a channel we did not
 build. If GitHub Actions and GitHub email are both down, you will find out from the
 internet.
+
+The price of that simplicity is speed. This layer reports a dead alert path within
+~12.5 h, not within the hour its thresholds suggest (see
+[worst-case detection latency](#worst-case-detection-latency)).
 
 ## Refs
 
