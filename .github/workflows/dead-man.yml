@@ -196,3 +196,25 @@ jobs:
 
           print("All dead-man stamps within their windows. Canaries alive.")
           PY
+
+      # Who watches the dead-man (homelab-heartbeat#20 AC5): healthchecks.io's
+      # dead-man-runs check (period 12 h, grace 2 h; the worst measured gap
+      # between runs is 11.4 h) emails when these pings stop. That covers a
+      # dead-man that stopped running, was disabled, or keeps failing.
+      #
+      # No `if:`, so the default success() applies: a failing check above
+      # never pings, so a red run can't make the check green. continue-on-error:
+      # an unreachable healthchecks.io must not turn this run red, because
+      # a red run emails "canary dead" when the canary is fine. Missing pings
+      # alert on their own. The URL is a secret: whoever holds it can keep the
+      # check green. tests/test_dead_man_ping.py
+      - name: Ping healthchecks.io (this run passed)
+        continue-on-error: true
+        env:
+          PING_URL: ${{ secrets.HEALTHCHECKS_DEADMAN_PING_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$PING_URL" || { echo "::warning::HEALTHCHECKS_DEADMAN_PING_URL is not set; not pinging"; exit 1; }
+          curl -fsS -m 10 --retry 3 -o /dev/null \
+            --data-raw "dead-man run ${{ github.run_id }} (${{ github.event_name }}) passed" \
+            "$PING_URL"
