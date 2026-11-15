@@ -33,10 +33,21 @@ watchdog.json   — proves an alert can LEAVE THE CLUSTER
       → n8n webhook
         → GitHub App token → stamp
 
-dead-man (GitHub Actions, cron 37 * * * *, ubuntu-latest)
+dead-man (GitHub Actions, cron 37 * * * *, ubuntu-latest)   — the backstop and the history
   ├─ heartbeat.json older than 180 min?  →  FAILS  →  GitHub emails you (every failed run)
   └─ watchdog.json  older than  60 min?  →  FAILS  →  GitHub emails you (every failed run)
+
+healthchecks.io (Hobbyist, $0, its own clock)               — the fast alarm
+  ├─ watchdog-alert-path  ← Alertmanager pings it with every Watchdog delivery   (15 min + 20 grace)
+  ├─ n8n-heartbeat        ← the canary pings it after each successful stamp       (1 h + 30 grace)
+  └─ dead-man-runs        ← each PASSING dead-man run pings it                    (12 h + 2 h grace)
+        a ping that stops arriving  →  healthchecks.io emails you
 ```
+
+The two layers fail differently, which is why both exist. healthchecks.io notices in
+minutes but keeps only a short ping log. GitHub notices in hours, but every stamp is a
+commit, and homelab#1843 builds the outage history from those commits. Either one
+alone still alerts if the other is down (homelab-heartbeat#20).
 
 **The cron is a request, not a guarantee.** GitHub delays scheduled runs under load
 and drops the ones it can't fit, and on this account it creates scheduled runs only
@@ -80,11 +91,21 @@ cron suggest. An outage shorter than the gap between two runs can open
 and close without either run seeing it (it happened on 2026-10-25, dvystrcil/homelab#1802), and
 a point-sample alarm can never catch that. The gap history lives in dvystrcil/homelab#1843.
 
-This is accepted, not pending a fix (homelab-heartbeat#10, 2026-11-14). GitHub's
-scheduler can't deliver less, and every faster trigger considered either ran on the
-cluster, needed a dispatch credential, or broke GitHub's Actions terms by holding a
-hosted runner for hours. If the bound has to come down, the route is a second
-off-cluster observer with its own clock, not a change to this workflow.
+That is the GitHub layer's bound, and it was accepted (homelab-heartbeat#10,
+2026-11-14): GitHub's scheduler can't deliver less, and every faster trigger considered
+either ran on the cluster, needed a dispatch credential, or broke GitHub's Actions
+terms by holding a hosted runner for hours. The bound came down instead with a second
+off-cluster observer that has its own clock (homelab-heartbeat#20):
+
+| healthchecks.io check | pinged by | period + grace | email after the pings stop |
+|---|---|---|---|
+| `watchdog-alert-path` | Alertmanager, every Watchdog delivery (~15–20 min) | 15 min + 20 min | **~35 min** |
+| `n8n-heartbeat` | the canary, after each successful stamp | 1 h + 30 min | **~90 min** |
+| `dead-man-runs` | each passing dead-man run | 12 h + 2 h | **~14 h** (watches the dead-man itself) |
+
+The pings carry no state of their own. A ping URL is a credential (whoever holds it
+can keep a check green), so the URLs live in Infisical and in this repo's Actions
+secrets, never in git.
 
 ### What a long outage looks like in your inbox
 
@@ -127,24 +148,29 @@ commit and `git log -S 'discord'` on it returns nothing. Prometheus and Alertman
 were nowhere in its chain, so both could die with `heartbeat.json` staying perfectly
 fresh (dvystrcil/homelab#431).
 
-| what broke | `heartbeat.json` | `watchdog.json` | dead-man |
-|---|---|---|---|
-| n8n `$env` regresses again | stops | stops | fails |
-| n8n scheduler wedged (n8n-workflow#89) | stops | — | fails |
-| n8n down, or its App token expired | stops | stops | fails |
-| **Prometheus down / not evaluating** | *keeps stamping* | **stops** | fails |
-| **Alertmanager down or misrouted to `null`** | *keeps stamping* | **stops** | fails |
-| whole cluster down | stops | stops | fails |
-| power/ISP out | stops | stops | fails |
-| **dead-man itself is broken** | — | — | *see below* |
+| what broke | `heartbeat.json` | `watchdog.json` | dead-man | healthchecks.io |
+|---|---|---|---|---|
+| n8n `$env` regresses again | stops | stops | fails | `n8n-heartbeat` |
+| n8n scheduler wedged (n8n-workflow#89) | stops | — | fails | `n8n-heartbeat` |
+| n8n down, or its App token expired | stops | stops | fails | `n8n-heartbeat` |
+| **Prometheus down / not evaluating** | *keeps stamping* | **stops** | fails | `watchdog-alert-path` |
+| **Alertmanager down or misrouted to `null`** | *keeps stamping* | **stops** | fails | `watchdog-alert-path` |
+| whole cluster down | stops | stops | fails | both cluster checks |
+| power/ISP out | stops | stops | fails | both cluster checks |
+| **dead-man itself is broken** (disabled, failing, never scheduled) | — | — | — | `dead-man-runs` |
+
+The Watchdog's healthchecks.io ping comes straight from Alertmanager, not through n8n,
+so an n8n outage turns `watchdog.json` stale but leaves `watchdog-alert-path` green.
+That is correct: `n8n-heartbeat` is the check that catches n8n.
 
 The two rows in bold are exactly what `heartbeat.json` could never see, and are the
 reason this repo needed a second stamp.
 
-"Fails" means the email arrives within the
-[worst-case detection latency](#worst-case-detection-latency):
-up to ~12.5 h for a row the watchdog leg catches, ~14.5 h for one only `heartbeat.json`
-catches. It does not mean within an hour.
+In the dead-man column, "fails" means the email arrives within the GitHub layer's
+[worst-case detection latency](#worst-case-detection-latency): up to ~12.5 h for a row
+the watchdog leg catches, ~14.5 h for one only `heartbeat.json` catches. The
+healthchecks.io column is the one that arrives in minutes (~35 min alert path, ~90 min
+n8n).
 
 ### Still not covered
 
@@ -168,8 +194,9 @@ after 60 days of repository inactivity. A dead-man that quietly switches itself 
 worse than none. Because the canary commits here hourly, this repo is never inactive.
 The mechanism defends itself.
 
-**The notification path is GitHub's own email**, not Discord. Discord may be exactly
-what is broken. The alarm must not route through anything this system builds.
+**The notification paths are GitHub's and healthchecks.io's own email**, not Discord.
+Discord may be exactly what is broken. The alarm must not route through anything this
+system builds.
 
 **Every failure mode is fail-closed.** A dead App token, an unparseable file, a missing
 file, an expired credential — all produce a red workflow. There is deliberately no
@@ -182,6 +209,7 @@ repo exists to catch.
 |---|---|
 | `heartbeat.json` | **live.** Stamped hourly by `Alerting Canary — heartbeat stamp`; the `schedule` cron is enabled and passing. |
 | `watchdog.json` | **live.** Stamped every ~20 min by Alertmanager's `Watchdog` alert through the `monitoring/discord/watchdog-deadman` receiver (dvystrcil/n8n-workflow#164). |
+| healthchecks.io | **live.** `watchdog-alert-path` (dvystrcil/prometheus#99), `n8n-heartbeat` (dvystrcil/n8n-workflow#375), `dead-man-runs` (this repo). 3 of the Hobbyist plan's 20 checks. |
 
 While `watchdog.json` holds its seed the dead-man **warns but does not fail**, so an
 in-progress rollout cannot cry wolf on every run — an alarm that fires before it
@@ -194,15 +222,18 @@ rather than depending on anyone remembering.
 
 ## Who watches the dead-man?
 
-Nobody, and that is deliberate — the recursion has to stop somewhere. It stops here
-because this layer has the fewest moving parts (one cron, one file, one comparison),
-runs on infrastructure we do not operate, and reports through a channel we did not
-build. If GitHub Actions and GitHub email are both down, you will find out from the
-internet.
+healthchecks.io's `dead-man-runs` check. Every run that passes pings it as its last
+step, so a dead-man that stops running (disabled, never scheduled) or keeps failing goes
+silent there, and healthchecks.io emails within ~14 h. The step has no `if:`, so a run
+whose checks failed never pings and can't keep the check green. It is also
+`continue-on-error`, so an unreachable healthchecks.io can't turn a healthy run red and
+send a false "canary dead" email (tests/test_dead_man_ping.py). A missing secret fails
+closed the same way: no ping, so the check alerts.
 
-The price of that simplicity is speed. This layer reports a dead alert path within
-~12.5 h, not within the hour its thresholds suggest (see
-[worst-case detection latency](#worst-case-detection-latency)).
+The recursion stops at healthchecks.io itself. Nothing on our side watches it, and
+nothing should: it runs on infrastructure we do not operate and reports through a
+channel we did not build. If it and GitHub are both down at once, you will find out
+from the internet.
 
 ## Refs
 
