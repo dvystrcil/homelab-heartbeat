@@ -1,7 +1,7 @@
 {
-  "stamped_at": "2026-11-24T16:18:19Z",
+  "stamped_at": "2026-11-24T16:38:19Z",
   "source": "alertmanager-watchdog",
-  "run_id": "194147",
+  "run_id": "194164",
   "alert_status": "firing",
   "receiver": "monitoring/discord/watchdog-deadman",
   "alert_count": 1,
